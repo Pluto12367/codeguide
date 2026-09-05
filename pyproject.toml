@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codeguide"
+dynamic = ["version"]
+description = "CodeGuide — 代码库新人导游：扫描仓库，生成架构图、阅读路线与新人入职指南"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "CodeGuide Contributors" }]
+keywords = ["code-analysis", "developer-tools", "llm", "rag", "tree-sitter", "onboarding"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "tree-sitter>=0.22",
+    "tree-sitter-python>=0.21",
+    "rich>=13.0",
+    "networkx>=3.0",
+    "jinja2>=3.1",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.urls]
+Homepage = "https://github.com/yourname/codeguide"
+Issues = "https://github.com/yourname/codeguide/issues"
+
+[project.scripts]
+codeguide = "codeguide.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["codeguide*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "codeguide.__version__" }
