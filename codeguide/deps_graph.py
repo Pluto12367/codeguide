@@ -1,12 +1,17 @@
-"""Python import 依赖图构建。"""
+"""Python import 依赖图构建 + JS/TS 相对路径依赖 + 循环依赖检测。"""
 
 from __future__ import annotations
 
+import posixpath
+from itertools import islice
 from pathlib import Path, PurePosixPath
 
 import networkx as nx
 
 from .models import FileInfo
+
+JS_EXTENSIONS = ("", ".js", ".ts", ".jsx", ".tsx")
+MAX_CYCLES = 20
 
 
 def module_name_for(path: PurePosixPath, strip_prefix: str | None = None) -> str | None:
@@ -76,11 +81,27 @@ def package_of(file: FileInfo) -> str | None:
     return file.module_name.rsplit(".", 1)[0]
 
 
+def resolve_js_import(importing_file: str, source: str, path_set: set[str]) -> str | None:
+    """JS 相对导入 -> 仓库内文件路径；非相对导入（npm 包）返回 None。"""
+    if not source.startswith("."):
+        return None
+    base = posixpath.normpath(
+        posixpath.join(posixpath.dirname(importing_file), source)
+    )
+    candidates = [base + ext for ext in JS_EXTENSIONS]
+    candidates += [posixpath.join(base, "index" + ext) for ext in JS_EXTENSIONS[1:]]
+    for cand in candidates:
+        if cand in path_set and cand != importing_file:
+            return cand
+    return None
+
+
 def build_dependency_graph(files: list[FileInfo]) -> tuple[list[str], list[list]]:
     """构建文件级依赖图。
 
     返回 (nodes, edges)，edge = [src_path, dst_path, weight]。
-    只包含解析出模块名且有内部 import 的 Python 文件。
+    Python 文件按模块名解析 import；JS/TS 文件解析相对路径 import
+    （npm 包为外部依赖，不进图）。
     """
     module_map: dict[str, str] = {}
     for f in files:
@@ -89,8 +110,12 @@ def build_dependency_graph(files: list[FileInfo]) -> tuple[list[str], list[list]
 
     graph = nx.DiGraph()
     py_files = [f for f in files if f.language == "python" and f.module_name]
-    for f in py_files:
+    js_files = [
+        f for f in files if f.language in ("javascript", "typescript")
+    ]
+    for f in py_files + js_files:
         graph.add_node(f.path)
+    path_set = {f.path for f in files}
 
     for f in py_files:
         package = package_of(f)
@@ -124,6 +149,14 @@ def build_dependency_graph(files: list[FileInfo]) -> tuple[list[str], list[list]
                     if target and target != f.path:
                         _add_edge(graph, f.path, target)
 
+    for f in js_files:
+        for record in f.imports:
+            if record.startswith("jsimport "):
+                source = record[len("jsimport "):]
+                target = resolve_js_import(f.path, source, path_set)
+                if target:
+                    _add_edge(graph, f.path, target)
+
     edges = [[u, v, d.get("weight", 1)] for u, v, d in graph.edges(data=True)]
     nodes = sorted(graph.nodes())
     return nodes, edges
@@ -134,6 +167,21 @@ def _add_edge(graph: nx.DiGraph, src: str, dst: str) -> None:
         graph[src][dst]["weight"] += 1
     else:
         graph.add_edge(src, dst, weight=1)
+
+
+def find_cycles(nodes: list[str], edges: list[list], max_cycles: int = MAX_CYCLES) -> list[list[str]]:
+    """检测文件级循环依赖，返回至多 max_cycles 个环（每个环内路径排序）。"""
+    graph = nx.DiGraph()
+    graph.add_nodes_from(nodes)
+    for src, dst, _w in edges:
+        graph.add_edge(src, dst)
+    if graph.number_of_nodes() == 0 or nx.is_directed_acyclic_graph(graph):
+        return []
+    cycles = [
+        sorted(cycle) for cycle in islice(nx.simple_cycles(graph), max_cycles)
+    ]
+    cycles.sort()
+    return cycles
 
 
 def hub_files(nodes: list[str], edges: list[list], top: int = 10) -> list[dict]:

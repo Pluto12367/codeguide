@@ -51,6 +51,8 @@ class RepoProfile:
     graph_edges: list[list] = field(default_factory=list)  # [src, dst, weight]
     # 枢纽文件：被内部引用最多的文件，按入度排序
     hub_files: list[dict] = field(default_factory=list)
+    # 循环依赖：每个环是文件路径列表
+    cycles: list[list[str]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)

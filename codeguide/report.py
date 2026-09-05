@@ -14,6 +14,7 @@ from jinja2 import Template
 from .diagram import mermaid_hub_graph, mermaid_module_graph
 from .languages import module_group
 from .models import RepoProfile
+from .risks import repo_risks
 from .roadmap import reading_route
 
 TEMPLATE = Template("""<!DOCTYPE html>
@@ -41,9 +42,13 @@ TEMPLATE = Template("""<!DOCTYPE html>
   .sub { opacity: .85; font-size: 14px; }
   .chips { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
   .chip { background: rgba(255,255,255,.15); border-radius: 999px; padding: 4px 14px; font-size: 13px; }
-  nav { margin: 20px 0 0; font-size: 14px; }
-  nav a { color: #fff; opacity: .85; margin-right: 16px; text-decoration: none; }
-  nav a:hover { opacity: 1; text-decoration: underline; }
+    nav {
+      margin: 20px 0 0; font-size: 14px;
+    }
+    nav a { color: #fff; opacity: .85; margin-right: 16px; text-decoration: none; }
+    nav a:hover { opacity: 1; text-decoration: underline; }
+    .cycle { background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px;
+             padding: 8px 14px; margin: 6px 0; font-size: 13px; color: #991b1b; }
   section { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
             padding: 24px 28px; margin-top: 20px; }
   h2 { margin: 0 0 12px; font-size: 20px; border-left: 4px solid var(--accent); padding-left: 10px; }
@@ -103,6 +108,7 @@ TEMPLATE = Template("""<!DOCTYPE html>
     </div>
     <nav>
       <a href="#overview">概览</a><a href="#arch">架构图</a><a href="#route">阅读路线</a>
+      <a href="#cycles">循环依赖</a><a href="#risks">风险热区</a>
       <a href="#modules">模块地图</a><a href="#symbols">符号速查</a>
     </nav>
   </div>
@@ -146,8 +152,34 @@ TEMPLATE = Template("""<!DOCTYPE html>
   {% else %}<p class="muted">未检测到内部依赖，无法生成路线。</p>{% endif %}
 </section>
 
+<section id="cycles">
+  <h2>4 · 循环依赖</h2>
+  {% if cycles %}
+  <p class="muted">以下 {{ cycles | length }} 组文件互相 import（每组内按路径排序）。循环依赖通常意味着职责划分需要调整，改动其中任何一个都要回归整组。</p>
+  {% for cycle in cycles %}
+  <div class="cycle">🔁 {{ cycle | join(' → ') }} → {{ cycle[0] }}</div>
+  {% endfor %}
+  {% else %}<p class="muted">✓ 未检测到文件级循环依赖。</p>{% endif %}
+</section>
+
+<section id="risks">
+  <h2>5 · 风险热区（git 变更 × PageRank）</h2>
+  {% if risks %}
+  <p class="muted">经常改动 × 被广泛依赖的文件最值得警惕，建议优先补测试。</p>
+  <table>
+    <thead><tr><th>文件</th><th>提交次数</th><th>PageRank</th><th>风险分</th></tr></thead>
+    <tbody>
+    {% for r in risks %}
+      <tr><td><code>{{ r.path }}</code></td><td>{{ r.commits }}</td>
+          <td>{{ '%.4f'|format(r.pagerank) }}</td><td>{{ '%.3f'|format(r.risk) }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">非 git 仓库或暂无提交记录，跳过风险分析。</p>{% endif %}
+</section>
+
 <section id="modules">
-  <h2>4 · 模块地图</h2>
+  <h2>6 · 模块地图</h2>
   {% for group, files in modules | dictsort %}
   <details {% if loop.first %}open{% endif %}>
     <summary>{{ group }} <span class="muted">（{{ files | length }} 个文件）</span></summary>
@@ -162,7 +194,7 @@ TEMPLATE = Template("""<!DOCTYPE html>
 </section>
 
 <section id="symbols">
-  <h2>5 · 符号速查</h2>
+  <h2>7 · 符号速查</h2>
   <p class="muted">共 {{ symbol_count }} 个类/函数。输入名称、路径或 docstring 关键词过滤。</p>
   <input id="symbol-search" type="search" placeholder="如：Engine、models.py、encode…" autofocus>
   <div class="tbl-wrap">
@@ -222,6 +254,8 @@ def render_report(profile: RepoProfile, llm: dict | None = None) -> str:
     summaries: dict[str, str] = llm.get("summaries") or {}
     module_summaries: dict[str, str] | None = llm.get("module_summaries")
 
+    risk_result = repo_risks(profile)
+
     # 按模块分组文件
     modules: dict[str, list[dict]] = {}
     for f in sorted(profile.files, key=lambda x: x.path):
@@ -253,6 +287,8 @@ def render_report(profile: RepoProfile, llm: dict | None = None) -> str:
         hub_graph=mermaid_hub_graph(profile),
         hub_top=min(8, len(profile.hub_files)) or 8,
         route=reading_route(profile),
+        cycles=profile.cycles,
+        risks=(risk_result or {}).get("rows", [])[:15],
         modules=modules,
         module_summaries=module_summaries,
         symbols_json=__import__("json").dumps(symbols, ensure_ascii=False),

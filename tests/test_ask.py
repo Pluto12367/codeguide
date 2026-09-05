@@ -91,32 +91,62 @@ def test_build_chunks_qualified_names(tmp_path: Path):
     assert header and "核心引擎模块" in header[0].text  # 模块 docstring 进入文件头
 
 
-def test_index_persistence_and_rebuild(tmp_path: Path):
+def test_index_incremental_rebuild(tmp_path: Path):
+    """增量索引：只有内容变化的文件才重新分块/嵌入。"""
     root = _make_repo(tmp_path)
     profile = scan_repo(root)
 
-    index1, rebuilt1 = build_index(profile, root, embedder=FakeEmbedder())
+    calls: list[int] = []
+
+    class CountingEmbedder(FakeEmbedder):
+        def embed(self, texts):
+            calls.append(len(texts))
+            return super().embed(texts)
+
+    index1, rebuilt1 = build_index(profile, root, embedder=CountingEmbedder())
     assert rebuilt1 and index1.vectors is not None
-    assert index1.embedder_id == "fake:test-embed"
+    first_count = sum(calls)
+    assert first_count > 0
+    assert set(index1.file_hashes) == {f.path for f in profile.files}
 
-    # 内容与嵌入模型都没变：命中缓存，不重建
-    index2, rebuilt2 = build_index(profile, root, embedder=FakeEmbedder())
-    assert not rebuilt2 and index2.repo_hash == index1.repo_hash
+    # 内容没变：零嵌入调用，不重建
+    calls.clear()
+    index2, rebuilt2 = build_index(profile, root, embedder=CountingEmbedder())
+    assert not rebuilt2
+    assert sum(calls) == 0
+    assert index2.embedder_id == "fake:test-embed"
 
-    # 换嵌入模型：必须重建（向量不可混用）
-    class OtherEmbedder(FakeEmbedder):
-        model_name = "fake:other"
-
-    _, rebuilt3 = build_index(profile, root, embedder=OtherEmbedder())
-    assert rebuilt3
-
-    # 内容变了：重建
+    # 只改一个文件：只重新嵌入它的分块
+    calls.clear()
     (root / "pkg" / "core.py").write_text("x = 2\n", encoding="utf-8")
     profile = scan_repo(root)
-    _, rebuilt4 = build_index(profile, root, embedder=FakeEmbedder())
-    assert rebuilt4
+    index3, rebuilt3 = build_index(profile, root, embedder=CountingEmbedder())
+    assert rebuilt3
+    changed_texts = sum(calls)
+    assert 0 < changed_texts < first_count
 
-    assert (root / ".codeguide" / "index.json").exists()
+    # 索引文件落盘为 v2 格式，可读回
+    import json
+
+    data = json.loads(
+        (root / ".codeguide" / "index.json").read_text(encoding="utf-8")
+    )
+    assert data["version"] == 2 and "pkg/app.py" in data["files"]
+
+    # 旧格式（v1）索引：识别为不可用，整体重建
+    (root / ".codeguide" / "index.json").write_text(
+        json.dumps({"hash": "x", "chunks": []}), encoding="utf-8"
+    )
+    _, rebuilt5 = build_index(profile, root, embedder=FakeEmbedder())
+    assert rebuilt5
+
+    # 换嵌入模型：向量不可混用，必须整体重建
+    class OtherEmbedder(CountingEmbedder):
+        model_name = "fake:other"
+
+    calls.clear()
+    _, rebuilt6 = build_index(profile, root, embedder=OtherEmbedder())
+    assert rebuilt6 and sum(calls) > 0
 
 
 def test_retrieve_lexical(tmp_path: Path):

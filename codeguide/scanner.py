@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
 
-from .deps_graph import build_dependency_graph, hub_files, module_name_for
+from .deps_graph import (
+    build_dependency_graph,
+    find_cycles,
+    hub_files,
+    module_name_for,
+)
 from .languages import detect_language, iter_source_files
 from .models import FileInfo, RepoProfile
 from .symbols import extract_python
+from .symbols_js import extract_js
 
 
 def detect_src_layout(rel_paths: list[str]) -> str | None:
@@ -47,6 +53,11 @@ def scan_repo(root: Path) -> RepoProfile:
             except Exception:
                 # 语法错误等解析失败不应中断整个扫描
                 symbols, imports, module_doc = [], [], None
+        elif language in ("javascript", "typescript"):
+            try:
+                symbols, imports = extract_js(language, path.suffix.lower(), source)
+            except Exception:
+                symbols, imports = [], []
 
         files.append(
             FileInfo(
@@ -80,4 +91,5 @@ def scan_repo(root: Path) -> RepoProfile:
         graph_nodes=nodes,
         graph_edges=edges,
         hub_files=hub_files(nodes, edges),
+        cycles=find_cycles(nodes, edges),
     )

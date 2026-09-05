@@ -93,6 +93,13 @@ def _render(
     out.append(mermaid_module_graph(profile))
     out.append("```\n")
 
+    if profile.cycles:
+        out.append("## ⚠️ 循环依赖\n")
+        out.append(f"检测到 {len(profile.cycles)} 组循环依赖（改动需整组回归）：\n")
+        for cycle in profile.cycles[:10]:
+            out.append(f"- {' → '.join(cycle)} → {cycle[0]}")
+        out.append("")
+
     out.append("## 6. 关键类速查\n")
     doc_classes = [
         (f.path, s)

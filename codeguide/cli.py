@@ -57,6 +57,12 @@ def _print_summary(profile) -> None:
             f"   符号：{n_classes} 个类 · {n_funcs} 个函数/方法"
         )
 
+    # 循环依赖
+    if profile.cycles:
+        console.print(f"   [yellow]⚠ 循环依赖：{len(profile.cycles)} 个[/]")
+        for cycle in profile.cycles[:3]:
+            console.print(f"      {' → '.join(cycle)} → {cycle[0]}")
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
@@ -123,6 +129,11 @@ def main(argv: list[str] | None = None) -> int:
         "--show-rows", action="store_true", help="逐题打印命中明细"
     )
 
+    rk = sub.add_parser("risks", help="风险热区：git 变更频次 × PageRank")
+    rk.add_argument("path", help="仓库根目录路径")
+    rk.add_argument("--since", default="1 year ago", help="统计时间范围（默认近一年）")
+    rk.add_argument("-n", "--top", type=int, default=15, help="显示条数（默认 15）")
+
     args = parser.parse_args(argv)
 
     if args.command == "scan":
@@ -155,6 +166,46 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "eval":
         return _run_eval(args)
 
+    if args.command == "risks":
+        return _run_risks(args)
+
+    return 0
+
+
+def _run_risks(args) -> int:
+    from .risks import repo_risks
+    from .scanner import scan_repo
+
+    root = Path(args.path)
+    if not root.is_dir():
+        console.print(f"[red]错误：{root} 不是目录[/]")
+        return 2
+
+    profile = scan_repo(root)
+    result = repo_risks(profile, since=args.since)
+    if result is None:
+        console.print(
+            "[yellow]该目录不是 git 仓库（或 git 不可用），无法统计变更热区。[/]"
+        )
+        return 1
+
+    rows = result["rows"][: args.top]
+    if not rows:
+        console.print("[yellow]没有同时具备变更记录与内部依赖的文件。[/]")
+        return 0
+
+    table = Table(title=f"风险热区（变更 × 核心度，{args.since} 以来）")
+    table.add_column("文件", style="green")
+    table.add_column("提交次数", justify="right", style="cyan")
+    table.add_column("PageRank", justify="right")
+    table.add_column("风险分", justify="right", style="yellow")
+    for r in rows:
+        table.add_row(
+            r["path"], str(r["commits"]), f"{r['pagerank']:.4f}", f"{r['risk']:.3f}"
+        )
+    console.print(table)
+    console.print("[dim]风险分 = 归一化变更频次 × 归一化 PageRank；"
+                  "越高说明越常改动且越核心，建议优先补测试。[/]")
     return 0
 
 

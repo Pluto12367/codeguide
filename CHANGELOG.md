@@ -3,6 +3,26 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循语义化版本。
 
+## [0.6.0] — 2026-09-06
+
+### 新增
+- **JS/TS 符号提取**：tree-sitter-javascript/typescript 解析
+  function/class 声明（含 export 包裹）、类方法、`const fn = () => {}`；
+  import/require/export-from 相对路径解析为仓库内依赖边，npm 包视为外部。
+  前后端混合仓库可出完整画像与架构图
+- **循环依赖检测**：文件级 `simple_cycles`（上限 20 组），呈现于
+  `scan` 摘要、HTML 报告、Markdown 指南。实测检出 requests 2.34.2 的
+  20 组真实文件级循环（`TYPE_CHECKING` 守卫下的互相引用）
+- **风险热区**：新 `codeguide risks <repo>` 命令与报告区块——
+  git 变更频次 × PageRank 交叉排序，"常改动 × 被广泛依赖"的文件优先暴露；
+  非 git 仓库优雅降级
+- **增量索引**：索引格式 v2，按文件内容哈希复用分块与向量——
+  改一个文件只重新分块/嵌入一个文件；嵌入模型的更改仍触发整体重建
+
+### 变更
+- 依赖新增 tree-sitter-javascript、tree-sitter-typescript
+- 索引 JSON 结构改为按文件分组（旧格式自动识别并整体重建）
+
 ## [0.5.0] — 2026-09-05
 
 ### 新增

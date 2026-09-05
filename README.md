@@ -6,23 +6,30 @@ CodeGuide 扫描代码仓库，产出结构化画像：语言构成、模块地�
 内部 import 依赖图、枢纽文件排名。后续版本将接入 LLM 生成分层架构摘要、Mermaid 架构图、
 "第一周阅读路线"，并支持针对仓库的 RAG 问答。
 
-## 当前功能（v0.5，检索质量优化轮）
+## 当前功能（v0.6，多语言与深度分析轮）
 
+- **多语言符号提取**（v0.6 新增）：Python 之外新增 JavaScript/TypeScript/TSX——
+  function/class 声明、类方法、`const fn = () => {}` 箭头函数；import/require/export-from
+  的相对路径解析为仓库内依赖边（npm 包视为外部依赖）。前后端混合仓库可出完整画像
+- **循环依赖检测**（v0.6 新增）：文件级 `simple_cycles`，CLI scan 摘要、HTML 报告、
+  Markdown 指南三处呈现（requests 上检出 20 组真实循环——`TYPE_CHECKING` 守卫下的互相引用）
+- **风险热区**（v0.6 新增）：`codeguide risks` 与报告区块——git 变更频次 × PageRank，
+  "经常改动 × 被广泛依赖"的文件排最前，给出补测试优先级；非 git 仓库优雅降级
+- **增量索引**（v0.6 新增）：索引格式 v2 按文件内容哈希复用分块与向量，
+  改一个文件只重嵌一个文件（嵌入是本地索引的主要耗时）；换嵌入模型自动整体重建
 - **语言检测**：识别 20+ 种源码文件，自动跳过 `.git`、`node_modules`、`__pycache__` 等无关目录
-- **符号提取**：基于 tree-sitter 解析 Python，提取类、函数、方法、docstring、行号（含装饰器与嵌套定义）
-- **依赖图**：解析 import 语句（含相对导入），构建文件级有向依赖图；自动识别 src-layout 并剥离 `src/` 前缀
+- **符号提取**：tree-sitter 解析，类/函数/方法/docstring/行号（含装饰器与嵌套定义）
+- **依赖图**：解析 import（Python 含相对导入），构建文件级有向依赖图；自动识别 src-layout
 - **枢纽文件**：按被内部依赖次数排序，找出"新人必须先读懂"的核心文件
-- **LLM 分层摘要**（v0.2）：文件 → 模块 → 全局三层压缩；5 个/批合并请求；内容哈希缓存零重复计费
-- **Mermaid 架构图**（v0.3）：模块级依赖图（跨模块边过少时自动降级为文件级核心图）+ 枢纽文件入边图
-- **PageRank 阅读路线**（v0.3）：起步（入口文件）→ 核心（PageRank 最高枢纽）→ 支撑三阶段，
-  自实现幂迭代 PageRank，零 numpy 依赖
-- **HTML 交互报告**（v0.3）：自包含单文件，含架构图、可搜索符号表、可折叠模块地图、阅读路线；
-  `report` 默认纯静态分析免运行，`--llm` 注入摘要
-- **仓库问答 RAG**（v0.4）：`codeguide ask`——本地索引，无 API Key 时降级为检索定位模式
-- **混合检索 + 本地语义嵌入**（v0.5 新增）：RRF 融合 BM25 与向量两路排序；
-  `pip install 'codeguide[local]'` 后用 fastembed/ONNX 本地嵌入（bge-small-zh，无 torch，离线运行）
-- **检索质量评测**（v0.5 新增）：`codeguide eval` 在黄金问答集上量化 Recall@1/3/5 与 MRR，
-  每项检索改进都有数据背书（见下文评测矩阵）
+- **LLM 分层摘要**（v0.2）：文件 → 模块 → 全局三层压缩；批量合并请求；内容哈希缓存零重复计费
+- **Mermaid 架构图**（v0.3）：模块级依赖图（单包仓库自动降级为文件级核心图）+ 枢纽文件入边图
+- **PageRank 阅读路线**（v0.3）：起步（入口）→ 核心（枢纽）→ 支撑三阶段，自实现幂迭代，零 numpy
+- **HTML 交互报告**（v0.3）：自包含单文件：架构图、阅读路线、循环依赖、风险热区、
+  可搜索符号表、模块地图；默认纯静态分析免费
+- **仓库问答 RAG**（v0.4）：`codeguide ask`，无 API Key 时降级为检索定位模式
+- **混合检索 + 本地语义嵌入**（v0.5）：RRF 融合 BM25 与向量；`[local]` 可选依赖
+  （fastembed/ONNX，无 torch，离线）
+- **检索质量评测**（v0.5）：`codeguide eval` 量化 Recall@1/3/5 与 MRR（见下文评测矩阵）
 
 ## 快速开始
 
@@ -34,8 +41,11 @@ pip install -e .
 codeguide scan ./some-repo
 codeguide scan ./some-repo --json profile.json
 
-# 2. 免费功能：交互式 HTML 报告（架构图 + 阅读路线 + 符号速查）
+# 2. 免费功能：交互式 HTML 报告（架构图 + 阅读路线 + 循环依赖 + 风险热区 + 符号速查）
 codeguide report ./some-repo -o report.html
+
+# 2b. 风险热区：git 变更频次 × PageRank（需要目标仓库是 git 仓库）
+codeguide risks ./some-repo --since "1 year ago"
 
 # 3. 仓库问答（索引本地构建；不配 Key 也能用检索定位模式）
 codeguide ask ./some-repo SSL 证书验证在哪里处理
@@ -106,7 +116,7 @@ LLM 查询改写（需真实 API Key 评测，待验证后再考虑加入）。
 - [x] 第 3 周：Mermaid 架构图、PageRank 阅读路线、HTML 交互报告
 - [x] 第 4 周：本地 RAG 问答、发布基建（GitHub Actions + PyPI 可信发布）
 - [x] 优化轮：混合检索（RRF）、本地语义嵌入、检索评测基建（v0.5.0）
-- [ ] 下一轮备选：多语言符号提取（JS/TS）、循环依赖检测、git 变更热区、增量索引
+- [x] 扩展轮：JS/TS 符号提取、循环依赖检测、git 风险热区、增量索引（v0.6.0）
 
 ## 运行测试
 

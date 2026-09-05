@@ -11,13 +11,14 @@ import json
 import math
 import re
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .models import RepoProfile
 
 INDEX_DIR = ".codeguide"
 INDEX_FILE = "index.json"
+INDEX_VERSION = 2
 MAX_CHUNKS = 3000
 SYMBOL_SNIPPET_LINES = 40
 EMBED_BATCH = 64
@@ -81,40 +82,42 @@ def build_chunks(
     max_chunks: int = MAX_CHUNKS,
 ) -> list[Chunk]:
     """把仓库画像切成检索单元：每个文件一条概要块 + 每个符号一条代码块。"""
-    summaries = summaries or {}
     chunks: list[Chunk] = []
     for f in profile.files:
         if len(chunks) >= max_chunks:
             break
-        src = sources.get(f.path, b"")
-        header_parts = [f.path]
-        if f.module_name:
-            header_parts.append(f.module_name)
-        if f.doc:
-            header_parts.append(f.doc)
-        if f.path in summaries:
-            header_parts.append(summaries[f.path])
-        chunks.append(Chunk(f.path, Path(f.path).name, "file", 1, " ".join(header_parts)))
-
-        for s, display in _qualified_symbols(f.symbols):
-            if len(chunks) >= max_chunks:
-                break
-            end = s.line + SYMBOL_SNIPPET_LINES  # 兜底：无后续符号时也截断
-            text = (
-                f"{f.path} {s.kind} {display} {s.doc or ''}\n"
-                + _snippet(src, s.line, SYMBOL_SNIPPET_LINES)
-            )
-            chunks.append(Chunk(f.path, display, s.kind, s.line, text))
+        chunks.extend(_chunks_for_file(f, sources.get(f.path, b""), summaries, max_chunks - len(chunks)))
     return chunks
 
 
-def repo_hash(profile: RepoProfile, sources: dict[str, bytes], embedder_id: str = "") -> str:
-    h = hashlib.sha1()
-    h.update(embedder_id.encode("utf-8"))
-    for path in sorted(sources):
-        h.update(path.encode("utf-8"))
-        h.update(hashlib.sha1(sources[path]).digest())
-    return h.hexdigest()
+def _chunks_for_file(
+    f, src: bytes, summaries: dict[str, str] | None, budget: int = MAX_CHUNKS
+) -> list[Chunk]:
+    """单个文件的分块：文件概要块 + 每个符号一条代码块。"""
+    summaries = summaries or {}
+    chunks: list[Chunk] = []
+    header_parts = [f.path]
+    if f.module_name:
+        header_parts.append(f.module_name)
+    if f.doc:
+        header_parts.append(f.doc)
+    if f.path in summaries:
+        header_parts.append(summaries[f.path])
+    chunks.append(Chunk(f.path, Path(f.path).name, "file", 1, " ".join(header_parts)))
+
+    for s, display in _qualified_symbols(f.symbols):
+        if len(chunks) >= budget:
+            break
+        text = (
+            f"{f.path} {s.kind} {display} {s.doc or ''}\n"
+            + _snippet(src, s.line, SYMBOL_SNIPPET_LINES)
+        )
+        chunks.append(Chunk(f.path, display, s.kind, s.line, text))
+    return chunks
+
+
+def file_hash(source: bytes) -> str:
+    return hashlib.sha1(source).hexdigest()
 
 
 class BM25:
@@ -176,22 +179,33 @@ def rrf_fuse(rankings: list[list[int]], k: int = RRF_K) -> list[tuple[int, float
 
 @dataclass
 class RepoIndex:
+    """文件级增量的仓库索引（格式 v2）。
+
+    file_hashes 记录每个文件的内容哈希；内容未变的文件直接复用
+    分块与向量，只有变化的文件重新分块/嵌入。
+    """
+
     chunks: list[Chunk]
     vectors: list[list[float]] | None = None  # 与 chunks 对齐；None = 未启用嵌入
-    repo_hash: str = ""
     embedder_id: str = ""
+    file_hashes: dict[str, str] = field(default_factory=dict)
 
     def save(self, root: Path) -> Path:
         out = root / INDEX_DIR / INDEX_FILE
         out.parent.mkdir(parents=True, exist_ok=True)
+        # 按文件重组（chunks 依文件顺序排列，便于切片）
+        files: dict[str, dict] = {}
+        for i, chunk in enumerate(self.chunks):
+            entry = files.setdefault(chunk.path, {"hash": self.file_hashes.get(chunk.path, ""), "chunks": [], "vectors": []})
+            entry["chunks"].append(chunk.to_dict())
+            if self.vectors is not None:
+                entry["vectors"].append(self.vectors[i])
+        for entry in files.values():
+            if self.vectors is None:
+                entry["vectors"] = None
         out.write_text(
             json.dumps(
-                {
-                    "hash": self.repo_hash,
-                    "embedder": self.embedder_id,
-                    "chunks": [c.to_dict() for c in self.chunks],
-                    "vectors": self.vectors,
-                },
+                {"version": INDEX_VERSION, "embedder": self.embedder_id, "files": files},
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -205,11 +219,22 @@ class RepoIndex:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
+        if data.get("version") != INDEX_VERSION:
+            return None  # 旧格式：整体重建
+        chunks: list[Chunk] = []
+        vectors: list[list[float]] = []
+        hashes: dict[str, str] = {}
+        for fpath, entry in data.get("files", {}).items():
+            hashes[fpath] = entry.get("hash", "")
+            for c in entry.get("chunks", []):
+                chunks.append(Chunk(**c))
+            if entry.get("vectors") is not None:
+                vectors.extend(entry["vectors"])
         return cls(
-            chunks=[Chunk(**c) for c in data.get("chunks", [])],
-            vectors=data.get("vectors"),
-            repo_hash=data.get("hash", ""),
+            chunks=chunks,
+            vectors=vectors if vectors else None,
             embedder_id=data.get("embedder", ""),
+            file_hashes=hashes,
         )
 
 
@@ -230,7 +255,10 @@ def build_index(
     summaries: dict[str, str] | None = None,
     progress=None,
 ) -> tuple[RepoIndex, bool]:
-    """加载或构建索引，返回 (index, rebuilt)。"""
+    """加载或增量构建索引，返回 (index, 是否有任何重建)。
+
+    内容未变的文件复用缓存的分块与向量；只有变化的文件重新处理。
+    """
     sources: dict[str, bytes] = {}
     for f in profile.files:
         try:
@@ -239,22 +267,70 @@ def build_index(
             sources[f.path] = b""
 
     embedder_id = getattr(embedder, "model_name", "") if embedder else ""
-    current_hash = repo_hash(profile, sources, embedder_id)
     cached = RepoIndex.load(root)
-    if cached and cached.repo_hash == current_hash:
-        return cached, False
+    cache_ok = cached is not None and cached.embedder_id == embedder_id
 
-    chunks = build_chunks(profile, sources, summaries)
-    vectors = None
-    if embedder and chunks:
-        vectors = _embed_texts(
-            embedder, [c.text for c in chunks], progress
-        )
+    # 逐文件决定复用或重建
+    reused: dict[str, tuple[list[Chunk], list[list[float]] | None]] = {}
+    todo: list = []  # (FileInfo, source)
+    for f in profile.files:
+        h = file_hash(sources[f.path])
+        if cache_ok and cached.file_hashes.get(f.path) == h:
+            file_chunks = [c for c in cached.chunks if c.path == f.path]
+            file_vectors = None
+            if cached.vectors is not None:
+                # 向量与 cached.chunks 对齐，按块归属切片
+                offsets = [i for i, c in enumerate(cached.chunks) if c.path == f.path]
+                file_vectors = [cached.vectors[i] for i in offsets]
+            reused[f.path] = (file_chunks, file_vectors)
+        else:
+            todo.append((f, h))
+
+    rebuilt = bool(todo) or not cache_ok
+    if todo:
+        if progress:
+            progress(f"增量索引：复用 {len(reused)} 个文件，重建 {len(todo)} 个")
+        new_chunks: dict[str, list[Chunk]] = {}
+        for f, _h in todo:
+            new_chunks[f.path] = _chunks_for_file(
+                f, sources[f.path], summaries, MAX_CHUNKS
+            )
+        new_vectors: dict[str, list[list[float]] | None] = {
+            f.path: None for f, _ in todo
+        }
+        if embedder:
+            flat_texts = [
+                c.text[:2000] for f, _ in todo for c in new_chunks[f.path]
+            ]
+            flat_vecs = _embed_texts(embedder, flat_texts, progress)
+            pos = 0
+            for f, _ in todo:
+                n = len(new_chunks[f.path])
+                new_vectors[f.path] = flat_vecs[pos : pos + n]
+                pos += n
+
+        for f, h in todo:
+            reused[f.path] = (new_chunks[f.path], new_vectors[f.path])
+
+    # 组装扁平索引（保持文件顺序）
+    chunks: list[Chunk] = []
+    vectors: list[list[float]] | None = None if embedder is None else []
+    hashes: dict[str, str] = {}
+    for f in profile.files:
+        file_chunks, file_vectors = reused[f.path]
+        hashes[f.path] = file_hash(sources[f.path])
+        chunks.extend(file_chunks)
+        if vectors is not None:
+            vectors.extend(file_vectors or [])
+
     index = RepoIndex(
-        chunks=chunks, vectors=vectors, repo_hash=current_hash, embedder_id=embedder_id
+        chunks=chunks,
+        vectors=vectors if vectors else None,
+        embedder_id=embedder_id,
+        file_hashes=hashes,
     )
     index.save(root)
-    return index, True
+    return index, rebuilt
 
 
 # ---------- 检索 ----------
