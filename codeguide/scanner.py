@@ -39,13 +39,14 @@ def scan_repo(root: Path) -> RepoProfile:
         symbols: list = []
         imports: list[str] = []
         module_name = None
+        module_doc = None
         if language == "python":
             module_name = module_name_for(PurePosixPath(rel), strip_prefix=strip_prefix)
             try:
-                symbols, imports = extract_python(path, source)
+                symbols, imports, module_doc = extract_python(path, source)
             except Exception:
                 # 语法错误等解析失败不应中断整个扫描
-                symbols, imports = [], []
+                symbols, imports, module_doc = [], [], None
 
         files.append(
             FileInfo(
@@ -54,6 +55,7 @@ def scan_repo(root: Path) -> RepoProfile:
                 lines=text_lines,
                 size_bytes=len(source),
                 module_name=module_name,
+                doc=module_doc,
                 symbols=symbols,
                 imports=imports,
             )

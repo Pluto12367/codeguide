@@ -6,7 +6,6 @@ from codeguide.symbols import extract_imports, extract_python
 def _parse(source: str):
     return extract_python("x.py", source.encode("utf-8"))
 
-
 def test_extract_symbols():
     source = '''
 import os
@@ -29,7 +28,8 @@ class Calculator:
 def decorated():
     pass
 '''
-    symbols, imports = _parse(source)
+    symbols, imports, doc = _parse(source)
+    assert doc is None  # 该源码没有模块 docstring
     names = {(s.name, s.kind) for s in symbols}
     assert ("top_func", "function") in names
     assert ("Calculator", "class") in names

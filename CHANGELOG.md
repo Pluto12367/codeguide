@@ -3,6 +3,31 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循语义化版本。
 
+## [0.5.0] — 2026-09-05
+
+### 新增
+- **检索质量评测基建**：`codeguide eval <repo> <golden.json>` 命令，
+  指标 Recall@1/3/5 与 MRR，`--json` 明细输出，`--show-rows` 逐题明细；
+  黄金问答集 `evals/golden_requests.json`（16 条针对 requests 2.34.2 的
+  人工核实问答，评测不依赖 LLM 生成，无 API Key 可跑）
+- **混合检索（RRF）**：Reciprocal Rank Fusion 融合 BM25 与向量两路排序，
+  `ask`/`eval` 新增 `--retrieval bm25|semantic|hybrid`（默认 auto：有向量即混合）。
+  在 requests 黄金集上 Recall@5 从 31.2%（纯 BM25）提升至 **68.8%**，MRR 0.34 → 0.47
+- **本地语义嵌入**：可选依赖 `codeguide[local]`（fastembed/ONNX，无 torch），
+  `--embedder local` 使用 bge-small-zh-v1.5，首次下载模型后完全离线；
+  `embedders.py` 统一 ApiEmbedder / LocalEmbedder 后端抽象
+- **分块质量**：方法块名带类名前缀（`Engine.start`），文件头块纳入模块
+  docstring（新增 FileInfo.doc，扫描时同步提取）
+
+### 变更
+- 索引格式加入嵌入模型标识：更换嵌入模型自动触发重建，避免向量混用
+- `build_index` 的 `client` 参数改为 `embedder`（嵌入与对话解耦）
+
+### 已评测并否决
+- cross-encoder 重排序：fastembed 0.8 中文可用模型为 bge-reranker-base
+  （1.04GB），下载与推理成本在当前语料规模下不成比例，暂缓
+- LLM 查询改写：需真实 API Key 评测有效性，验证前不加入
+
 ## [0.4.0] — 2026-09-05
 
 ### 新增

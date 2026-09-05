@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .indexer import build_index, retrieve, retrieve_semantic
+from .indexer import build_index, retrieve_auto
 from .models import RepoProfile
 
 ANSWER_SYSTEM_PROMPT = (
@@ -26,25 +26,22 @@ def ask(
     profile: RepoProfile,
     question: str,
     client=None,  # LLMClient | None；None 时只做检索定位
+    embedder=None,  # 嵌入后端；None 时退回词法检索
+    mode: str = "auto",  # bm25 | semantic | hybrid | auto
     top_k: int = 6,
     progress=None,
 ) -> dict:
     """回答关于仓库的问题。
 
-    返回 {"answer": str|None, "hits": [...], "index_rebuilt": bool}。
+    返回 {"answer": str|None, "hits": [...], "mode": 实际检索模式,
+    "index_rebuilt": bool}。
     answer 为 None 表示未配置 LLM，仅返回检索到的位置。
     """
     index, rebuilt = build_index(
-        profile, Path(profile.root), client=client, progress=progress
+        profile, Path(profile.root), embedder=embedder, progress=progress
     )
 
-    embed_model = getattr(client, "embed_model", "") if client else ""
-    if embed_model and index.vectors:
-        hits = retrieve_semantic(index, question, client, top_k)
-        mode = "语义"
-    else:
-        hits = retrieve(index, question, top_k)
-        mode = "词法"
+    hits, used_mode = retrieve_auto(index, question, embedder, mode, top_k)
 
     sources = [
         {
@@ -59,12 +56,9 @@ def ask(
 
     answer = None
     if client is not None:
-        summaries = {}
         if progress:
-            progress(f"{mode}检索到 {len(hits)} 个片段，生成回答…")
-        context = "\n\n".join(
-            _context_block(h, summaries.get(h[0].path)) for h in hits
-        )
+            progress(f"{used_mode}检索到 {len(hits)} 个片段，生成回答…")
+        context = "\n\n".join(_context_block(h, None) for h in hits)
         if not context:
             answer = "仓库中没有找到相关代码。"
         else:
@@ -77,6 +71,6 @@ def ask(
     return {
         "answer": answer,
         "hits": sources,
-        "mode": mode,
+        "mode": used_mode,
         "index_rebuilt": rebuilt,
     }

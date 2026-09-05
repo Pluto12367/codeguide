@@ -1,0 +1,173 @@
+{
+  "metrics": {
+    "questions": 16,
+    "recall@1": 0.25,
+    "recall@3": 0.5,
+    "recall@5": 0.5625,
+    "mrr": 0.3745
+  },
+  "rows": [
+    {
+      "question": "SSL 证书验证是在哪里处理的？",
+      "rank": null,
+      "hit": false,
+      "top1": "tests/test_requests.py",
+      "expected": [
+        "src/requests/adapters.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "HTTP 重定向是如何处理的？",
+      "rank": null,
+      "hit": false,
+      "top1": "tests/test_requests.py",
+      "expected": [
+        "src/requests/sessions.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "Cookie 是怎么管理和存储的？",
+      "rank": 8,
+      "hit": true,
+      "top1": "src/requests/utils.py",
+      "expected": [
+        "src/requests/cookies.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "Basic Auth 基础认证是怎么实现的？",
+      "rank": null,
+      "hit": false,
+      "top1": "tests/certs/mtls/README.md",
+      "expected": [
+        "src/requests/auth.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "请求超时是在哪里生效的？",
+      "rank": 5,
+      "hit": true,
+      "top1": "src/requests/help.py",
+      "expected": [
+        "src/requests/adapters.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "URL 和查询参数是如何编码拼接的？",
+      "rank": 3,
+      "hit": true,
+      "top1": "src/requests/utils.py",
+      "expected": [
+        "src/requests/models.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "流式下载大文件是怎么实现的？",
+      "rank": 1,
+      "hit": true,
+      "top1": "src/requests/models.py",
+      "expected": [
+        "src/requests/models.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "异常类定义在哪里？",
+      "rank": 2,
+      "hit": true,
+      "top1": "src/requests/auth.py",
+      "expected": [
+        "src/requests/exceptions.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "默认 User-Agent 字符串是在哪定义的？",
+      "rank": 2,
+      "hit": true,
+      "top1": "src/requests/_internal_utils.py",
+      "expected": [
+        "src/requests/utils.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "HTTP 状态码和含义的映射表在哪？",
+      "rank": 3,
+      "hit": true,
+      "top1": "src/requests/models.py",
+      "expected": [
+        "src/requests/status_codes.py",
+        "src/requests/structures.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "代理 proxy 支持在哪里实现？",
+      "rank": 1,
+      "hit": true,
+      "top1": "src/requests/adapters.py",
+      "expected": [
+        "src/requests/adapters.py",
+        "src/requests/utils.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "如何从响应中推断文本编码？",
+      "rank": null,
+      "hit": false,
+      "top1": "src/requests/exceptions.py",
+      "expected": [
+        "src/requests/utils.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "JSON 请求体是怎么序列化的？",
+      "rank": null,
+      "hit": false,
+      "top1": "src/requests/help.py",
+      "expected": [
+        "src/requests/models.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "传输适配器是怎么挂载到会话上的？",
+      "rank": null,
+      "hit": false,
+      "top1": "src/requests/adapters.py",
+      "expected": [
+        "src/requests/sessions.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "环境变量里的代理设置是怎么读取的？",
+      "rank": 1,
+      "hit": true,
+      "top1": "src/requests/utils.py",
+      "expected": [
+        "src/requests/utils.py"
+      ],
+      "mode": "语义"
+    },
+    {
+      "question": "请求钩子 hooks 是如何分发的？",
+      "rank": 1,
+      "hit": true,
+      "top1": "src/requests/hooks.py",
+      "expected": [
+        "src/requests/hooks.py"
+      ],
+      "mode": "语义"
+    }
+  ]
+}

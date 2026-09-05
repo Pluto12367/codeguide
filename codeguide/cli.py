@@ -93,9 +93,35 @@ def main(argv: list[str] | None = None) -> int:
     ask.add_argument("path", help="仓库根目录路径")
     ask.add_argument("question", nargs="+", help="问题，如：错误处理在哪里统一做的？")
     ask.add_argument("-k", "--top-k", type=int, default=6, help="检索片段数（默认 6）")
+    ask.add_argument(
+        "--retrieval",
+        choices=["auto", "bm25", "semantic", "hybrid"],
+        default="auto",
+        help="检索模式（默认 auto：有嵌入向量则混合，否则词法）",
+    )
+    ask.add_argument(
+        "--embedder",
+        default=None,
+        help="嵌入后端：local / local:模型名 / api（默认读 CODEGUIDE_EMBED_MODEL）",
+    )
     ask.add_argument("--api-key", default=None, help="覆盖 CODEGUIDE_API_KEY")
     ask.add_argument("--base-url", default=None, help="覆盖 CODEGUIDE_BASE_URL")
     ask.add_argument("--model", default=None, help="覆盖 CODEGUIDE_MODEL")
+
+    ev = sub.add_parser("eval", help="在黄金问答集上评测检索质量（Recall@k / MRR）")
+    ev.add_argument("path", help="仓库根目录路径")
+    ev.add_argument("golden", help="黄金问答集 JSON 路径")
+    ev.add_argument(
+        "--retrieval",
+        choices=["auto", "bm25", "semantic", "hybrid"],
+        default="auto",
+        help="检索模式（默认 auto）",
+    )
+    ev.add_argument("--embedder", default=None, help="嵌入后端：local / local:模型名 / api")
+    ev.add_argument("--json", dest="json_out", help="把详细结果写入 JSON 文件")
+    ev.add_argument(
+        "--show-rows", action="store_true", help="逐题打印命中明细"
+    )
 
     args = parser.parse_args(argv)
 
@@ -126,7 +152,24 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ask":
         return _run_ask(args)
 
+    if args.command == "eval":
+        return _run_eval(args)
+
     return 0
+
+
+def _resolve_embedder(args):
+    """按 CLI 参数构造嵌入后端；失败时打印警告并降级为词法。"""
+    from .embedders import get_embedder
+
+    if not args.embedder:
+        return None
+    try:
+        client = _make_llm(args) if args.embedder == "api" else None
+        return get_embedder(args.embedder, llm_client=client)
+    except (ValueError, ImportError) as e:
+        console.print(f"[yellow]警告：嵌入后端不可用（{e}），使用词法检索。[/]")
+        return None
 
 
 def _run_ask(args) -> int:
@@ -146,12 +189,15 @@ def _run_ask(args) -> int:
     except LLMError as e:
         console.print(f"[yellow]未配置 LLM（{e}），降级为检索定位模式。[/]")
 
+    embedder = _resolve_embedder(args)
     profile = scan_repo(root)
     try:
         result = ask(
             profile,
             question,
             client=client,
+            embedder=embedder,
+            mode=args.retrieval,
             top_k=args.top_k,
             progress=lambda m: console.print(f"  [dim]… {m}[/]"),
         )
@@ -176,6 +222,78 @@ def _run_ask(args) -> int:
     for h in result["hits"]:
         table.add_row(f"{h['path']}:{h['line']}", h["name"], h["kind"], f"{h['score']:.3f}")
     console.print(table)
+    return 0
+
+
+def _run_eval(args) -> int:
+    import json as _json
+
+    from .evaluate import evaluate_retrieval, load_golden
+    from .scanner import scan_repo
+
+    root = Path(args.path)
+    if not root.is_dir():
+        console.print(f"[red]错误：{root} 不是目录[/]")
+        return 2
+    golden_path = Path(args.golden)
+    if not golden_path.is_file():
+        console.print(f"[red]错误：{golden_path} 不是文件[/]")
+        return 2
+
+    embedder = _resolve_embedder(args)
+    try:
+        cases = load_golden(golden_path)
+    except ValueError as e:
+        console.print(f"[red]黄金集格式错误：{e}[/]")
+        return 2
+
+    profile = scan_repo(root)
+    console.print(
+        f"[dim]评测：{len(cases)} 题 · 模式 {args.retrieval} · "
+        f"嵌入 {embedder.model_name if embedder else '无（词法）'}[/]"
+    )
+    result = evaluate_retrieval(
+        profile,
+        cases,
+        embedder=embedder,
+        mode=args.retrieval,
+        progress=lambda m: console.print(f"  [dim]… {m}[/]"),
+    )
+
+    m = result["metrics"]
+    if args.json_out:
+        Path(args.json_out).write_text(
+            _json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        console.print(f"[green]明细已写入 {args.json_out}[/]")
+
+    table = Table(title="检索评测结果")
+    table.add_column("指标", style="cyan")
+    table.add_column("数值", justify="right", style="yellow")
+    table.add_row("题目数", str(m.get("questions", 0)))
+    for k in (1, 3, 5):
+        if f"recall@{k}" in m:
+            table.add_row(f"Recall@{k}", f"{m[f'recall@{k}']:.1%}")
+    if "mrr" in m:
+        table.add_row("MRR", f"{m['mrr']:.4f}")
+    console.print(table)
+
+    if args.show_rows:
+        table = Table(title="逐题明细")
+        table.add_column("#", justify="right")
+        table.add_column("问题", max_width=36)
+        table.add_column("排名", justify="right")
+        table.add_column("命中", justify="center")
+        table.add_column("预期文件", max_width=36)
+        for i, r in enumerate(result["rows"], 1):
+            table.add_row(
+                str(i),
+                r["question"][:34],
+                str(r["rank"]) if r["rank"] else "-",
+                "✓" if r["hit"] else "✗",
+                r["expected"][0] if r["expected"] else "",
+            )
+        console.print(table)
     return 0
 
 

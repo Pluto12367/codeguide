@@ -130,12 +130,17 @@ def extract_imports(node) -> list[str]:
     return imports
 
 
-def extract_python(path: Path, source: bytes) -> tuple[list[Symbol], list[str]]:
-    """解析一个 Python 文件，返回 (symbols, imports)。"""
+def module_docstring(root) -> str | None:
+    """取模块级 docstring 首行（文件体第一条语句若是字符串）。"""
+    return _first_docstring(root)
+
+
+def extract_python(path: Path, source: bytes) -> tuple[list[Symbol], list[str], str | None]:
+    """解析一个 Python 文件，返回 (symbols, imports, module_doc)。"""
     tree = _parser.parse(source)
     root = tree.root_node
 
     symbols: list[Symbol] = []
     _walk_definitions(root, symbols)
     imports = extract_imports(root)
-    return symbols, imports
+    return symbols, imports, module_docstring(root)

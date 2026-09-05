@@ -1,0 +1,102 @@
+{
+  "description": "CodeGuide 检索评测黄金集 — requests 2.34.2。所有答案均经人工读源码核实（行号以 2.34.2 为准，expected_files 不含行号因此对小版本变化稳健）。",
+  "version": 1,
+  "cases": [
+    {
+      "question": "SSL 证书验证是在哪里处理的？",
+      "expected_files": ["src/requests/adapters.py"],
+      "expected_symbols": ["cert_verify"],
+      "note": "adapters.py:307 HTTPAdapter.cert_verify"
+    },
+    {
+      "question": "HTTP 重定向是如何处理的？",
+      "expected_files": ["src/requests/sessions.py"],
+      "expected_symbols": ["resolve_redirects", "rebuild_method"],
+      "note": "sessions.py:186 resolve_redirects / :370 rebuild_method"
+    },
+    {
+      "question": "Cookie 是怎么管理和存储的？",
+      "expected_files": ["src/requests/cookies.py"],
+      "expected_symbols": ["RequestsCookieJar", "create_cookie", "cookiejar_from_dict"],
+      "note": "cookies.py 整个模块"
+    },
+    {
+      "question": "Basic Auth 基础认证是怎么实现的？",
+      "expected_files": ["src/requests/auth.py"],
+      "expected_symbols": ["HTTPBasicAuth"],
+      "note": "auth.py:85 HTTPBasicAuth"
+    },
+    {
+      "question": "请求超时是在哪里生效的？",
+      "expected_files": ["src/requests/adapters.py"],
+      "expected_symbols": [],
+      "note": "adapters.py send() 把 timeout 传给 urllib3 urlopen"
+    },
+    {
+      "question": "URL 和查询参数是如何编码拼接的？",
+      "expected_files": ["src/requests/models.py"],
+      "expected_symbols": ["prepare_url"],
+      "note": "models.py PreparedRequest.prepare_url"
+    },
+    {
+      "question": "流式下载大文件是怎么实现的？",
+      "expected_files": ["src/requests/models.py"],
+      "expected_symbols": ["iter_content"],
+      "note": "models.py:905 Response.iter_content"
+    },
+    {
+      "question": "异常类定义在哪里？",
+      "expected_files": ["src/requests/exceptions.py"],
+      "expected_symbols": ["RequestException"],
+      "note": "exceptions.py 25 个异常类"
+    },
+    {
+      "question": "默认 User-Agent 字符串是在哪定义的？",
+      "expected_files": ["src/requests/utils.py"],
+      "expected_symbols": ["default_user_agent"],
+      "note": "utils.py:942"
+    },
+    {
+      "question": "HTTP 状态码和含义的映射表在哪？",
+      "expected_files": ["src/requests/status_codes.py", "src/requests/structures.py"],
+      "expected_symbols": ["codes", "LookupDict"],
+      "note": "status_codes.py 的 codes 实例 + structures.py 的 LookupDict 实现"
+    },
+    {
+      "question": "代理 proxy 支持在哪里实现？",
+      "expected_files": ["src/requests/adapters.py", "src/requests/utils.py"],
+      "expected_symbols": ["proxy_manager_for", "select_proxy"],
+      "note": "adapters.py:269 proxy_manager_for + utils.py:885 select_proxy"
+    },
+    {
+      "question": "如何从响应中推断文本编码？",
+      "expected_files": ["src/requests/utils.py"],
+      "expected_symbols": ["get_encodings_from_content", "get_unicode_from_response"],
+      "note": "utils.py:522/:633"
+    },
+    {
+      "question": "JSON 请求体是怎么序列化的？",
+      "expected_files": ["src/requests/models.py"],
+      "expected_symbols": ["prepare_body"],
+      "note": "models.py:574 prepare_body 中 complexjson.dumps"
+    },
+    {
+      "question": "传输适配器是怎么挂载到会话上的？",
+      "expected_files": ["src/requests/sessions.py"],
+      "expected_symbols": ["mount", "get_adapter"],
+      "note": "sessions.py:888 mount / :870 get_adapter"
+    },
+    {
+      "question": "环境变量里的代理设置是怎么读取的？",
+      "expected_files": ["src/requests/utils.py"],
+      "expected_symbols": ["get_environ_proxies"],
+      "note": "utils.py:873"
+    },
+    {
+      "question": "请求钩子 hooks 是如何分发的？",
+      "expected_files": ["src/requests/hooks.py"],
+      "expected_symbols": ["dispatch_hook"],
+      "note": "hooks.py:32 dispatch_hook"
+    }
+  ]
+}

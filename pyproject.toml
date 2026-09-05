@@ -36,6 +36,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+local = ["fastembed>=0.4"]
 
 [project.urls]
 Homepage = "https://github.com/yourname/codeguide"

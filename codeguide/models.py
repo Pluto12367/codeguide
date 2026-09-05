@@ -27,6 +27,7 @@ class FileInfo:
     lines: int
     size_bytes: int
     module_name: str | None = None  # Python 模块名（如 "pkg.sub.mod"）
+    doc: str | None = None  # 模块 docstring 首行
     symbols: list[Symbol] = field(default_factory=list)
     imports: list[str] = field(default_factory=list)  # 原始 import 记录
 

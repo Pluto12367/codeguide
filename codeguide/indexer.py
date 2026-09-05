@@ -1,7 +1,7 @@
-"""本地索引与检索：代码分块 + BM25（零依赖）+ 可选 API 语义嵌入。
+"""本地索引与检索：代码分块 + BM25 / 语义 / RRF 混合检索。
 
-索引落盘在目标仓库的 .codeguide/index.json，以全仓库内容哈希判断
-是否需要重建。未配置嵌入模型时自动使用 BM25 词法检索。
+索引落盘在目标仓库的 .codeguide/index.json，以「全仓库内容哈希 + 嵌入模型
+标识」判断是否需要重建。未提供 embedder 时自动使用 BM25 词法检索。
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import json
 import math
 import re
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .models import RepoProfile
@@ -21,6 +21,7 @@ INDEX_FILE = "index.json"
 MAX_CHUNKS = 3000
 SYMBOL_SNIPPET_LINES = 40
 EMBED_BATCH = 64
+RRF_K = 60
 
 _WORD = re.compile(r"[a-zA-Z0-9_]+|[\u4e00-\u9fff]+")
 
@@ -56,6 +57,23 @@ def _snippet(source: bytes, start_line: int, max_lines: int) -> str:
     return "\n".join(lines[start : start + max_lines])
 
 
+def _qualified_symbols(symbols: list):
+    """给方法补上所属类名（Engine.start），并保持行序。"""
+    ordered = sorted(symbols, key=lambda s: s.line)
+    current_class: str | None = None
+    for s in ordered:
+        if s.kind == "class":
+            current_class = s.name
+        elif s.kind == "function":
+            current_class = None  # 模块级函数意味着类作用域已结束
+        display = (
+            f"{current_class}.{s.name}"
+            if (s.kind == "method" and current_class)
+            else s.name
+        )
+        yield s, display
+
+
 def build_chunks(
     profile: RepoProfile,
     sources: dict[str, bytes],
@@ -72,30 +90,27 @@ def build_chunks(
         header_parts = [f.path]
         if f.module_name:
             header_parts.append(f.module_name)
+        if f.doc:
+            header_parts.append(f.doc)
         if f.path in summaries:
             header_parts.append(summaries[f.path])
         chunks.append(Chunk(f.path, Path(f.path).name, "file", 1, " ".join(header_parts)))
 
-        ordered = sorted(f.symbols, key=lambda s: s.line)
-        for i, s in enumerate(ordered):
+        for s, display in _qualified_symbols(f.symbols):
             if len(chunks) >= max_chunks:
                 break
-            end = ordered[i + 1].line - 1 if i + 1 < len(ordered) else None
-            span = (
-                min(end - s.line + 1, SYMBOL_SNIPPET_LINES)
-                if end
-                else SYMBOL_SNIPPET_LINES
-            )
+            end = s.line + SYMBOL_SNIPPET_LINES  # 兜底：无后续符号时也截断
             text = (
-                f"{f.path} {s.kind} {s.name} {s.doc or ''}\n"
-                + _snippet(src, s.line, max(span, 1))
+                f"{f.path} {s.kind} {display} {s.doc or ''}\n"
+                + _snippet(src, s.line, SYMBOL_SNIPPET_LINES)
             )
-            chunks.append(Chunk(f.path, s.name, s.kind, s.line, text))
+            chunks.append(Chunk(f.path, display, s.kind, s.line, text))
     return chunks
 
 
-def repo_hash(profile: RepoProfile, sources: dict[str, bytes]) -> str:
+def repo_hash(profile: RepoProfile, sources: dict[str, bytes], embedder_id: str = "") -> str:
     h = hashlib.sha1()
+    h.update(embedder_id.encode("utf-8"))
     for path in sorted(sources):
         h.update(path.encode("utf-8"))
         h.update(hashlib.sha1(sources[path]).digest())
@@ -146,11 +161,25 @@ def cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb) if na and nb else 0.0
 
 
+def rrf_fuse(rankings: list[list[int]], k: int = RRF_K) -> list[tuple[int, float]]:
+    """Reciprocal Rank Fusion：融合多路排序，score = Σ 1/(k + rank)。
+
+    输入每路的候选索引列表（按该路分数降序），输出融合后的
+    [(索引, rrf分数)] 降序列表。对异构分数量纲天然免疫。
+    """
+    scores: dict[int, float] = {}
+    for indices in rankings:
+        for rank, idx in enumerate(indices, 1):
+            scores[idx] = scores.get(idx, 0.0) + 1.0 / (k + rank)
+    return sorted(scores.items(), key=lambda kv: -kv[1])
+
+
 @dataclass
 class RepoIndex:
     chunks: list[Chunk]
     vectors: list[list[float]] | None = None  # 与 chunks 对齐；None = 未启用嵌入
     repo_hash: str = ""
+    embedder_id: str = ""
 
     def save(self, root: Path) -> Path:
         out = root / INDEX_DIR / INDEX_FILE
@@ -159,6 +188,7 @@ class RepoIndex:
             json.dumps(
                 {
                     "hash": self.repo_hash,
+                    "embedder": self.embedder_id,
                     "chunks": [c.to_dict() for c in self.chunks],
                     "vectors": self.vectors,
                 },
@@ -179,23 +209,24 @@ class RepoIndex:
             chunks=[Chunk(**c) for c in data.get("chunks", [])],
             vectors=data.get("vectors"),
             repo_hash=data.get("hash", ""),
+            embedder_id=data.get("embedder", ""),
         )
 
 
-def _embed_texts(client, texts: list[str], progress=None) -> list[list[float]]:
+def _embed_texts(embedder, texts: list[str], progress=None) -> list[list[float]]:
     vectors: list[list[float]] = []
     for i in range(0, len(texts), EMBED_BATCH):
         batch = texts[i : i + EMBED_BATCH]
         if progress:
             progress(f"嵌入 {i + 1}-{i + len(batch)}/{len(texts)}")
-        vectors.extend(client.embed(batch))
+        vectors.extend(embedder.embed(batch))
     return vectors
 
 
 def build_index(
     profile: RepoProfile,
     root: Path,
-    client=None,  # LLMClient；提供且配置了嵌入模型时启用语义索引
+    embedder=None,  # 提供（ApiEmbedder/LocalEmbedder）时启用语义向量
     summaries: dict[str, str] | None = None,
     progress=None,
 ) -> tuple[RepoIndex, bool]:
@@ -207,42 +238,101 @@ def build_index(
         except OSError:
             sources[f.path] = b""
 
-    current_hash = repo_hash(profile, sources)
+    embedder_id = getattr(embedder, "model_name", "") if embedder else ""
+    current_hash = repo_hash(profile, sources, embedder_id)
     cached = RepoIndex.load(root)
     if cached and cached.repo_hash == current_hash:
         return cached, False
 
     chunks = build_chunks(profile, sources, summaries)
     vectors = None
-    embed_model = getattr(client, "embed_model", "") if client else ""
-    if embed_model and chunks:
+    if embedder and chunks:
         vectors = _embed_texts(
-            client, [c.text[:2000] for c in chunks], progress
+            embedder, [c.text for c in chunks], progress
         )
-    index = RepoIndex(chunks=chunks, vectors=vectors, repo_hash=current_hash)
+    index = RepoIndex(
+        chunks=chunks, vectors=vectors, repo_hash=current_hash, embedder_id=embedder_id
+    )
     index.save(root)
     return index, True
 
 
-def retrieve(
-    index: RepoIndex, question: str, top_k: int = 6
-) -> list[tuple[Chunk, float]]:
-    """按索引类型自动选择语义（嵌入）或词法（BM25）检索。"""
-    if index.vectors and len(index.vectors) == len(index.chunks):
-        raise NotImplementedError("需要查询向量，请走 retrieve_semantic")
+# ---------- 检索 ----------
+
+
+def _bm25_ranking(index: RepoIndex, question: str, top_k: int) -> list[tuple[int, float]]:
     bm25 = BM25([tokenize(c.text) for c in index.chunks])
-    hits = bm25.search(tokenize(question), top_k)
-    return [(index.chunks[i], s) for i, s in hits]
+    return bm25.search(tokenize(question), top_k)
+
+
+def _semantic_ranking(
+    index: RepoIndex, question: str, embedder, top_k: int
+) -> list[tuple[int, float]]:
+    qvec = embedder.embed([question])[0]
+    scored = [
+        (i, cosine(qvec, vec))
+        for i, vec in enumerate(index.vectors or [])
+    ]
+    scored = [(i, s) for i, s in scored if s > 0]
+    scored.sort(key=lambda kv: -kv[1])
+    return scored[:top_k]
+
+
+def _to_chunks(index: RepoIndex, ranking: list[tuple[int, float]]) -> list[tuple["Chunk", float]]:
+    return [(index.chunks[i], s) for i, s in ranking]
+
+
+def retrieve(index: RepoIndex, question: str, top_k: int = 6) -> list[tuple[Chunk, float]]:
+    """BM25 词法检索（兼容旧接口）。"""
+    return _to_chunks(index, _bm25_ranking(index, question, top_k))
 
 
 def retrieve_semantic(
-    index: RepoIndex, question: str, client, top_k: int = 6
+    index: RepoIndex, question: str, embedder, top_k: int = 6
 ) -> list[tuple[Chunk, float]]:
-    qvec = client.embed([question])[0]
-    scored = [
-        (chunk, cosine(qvec, vec))
-        for chunk, vec in zip(index.chunks, index.vectors or [])
-    ]
-    scored = [(c, s) for c, s in scored if s > 0]
-    scored.sort(key=lambda kv: -kv[1])
-    return scored[:top_k]
+    """纯语义检索，需要索引含向量。"""
+    return _to_chunks(index, _semantic_ranking(index, question, embedder, top_k))
+
+
+def retrieve_hybrid(
+    index: RepoIndex,
+    question: str,
+    embedder,
+    top_k: int = 6,
+    candidates: int = 20,
+) -> list[tuple[Chunk, float]]:
+    """RRF 混合检索：BM25 与向量两路各取候选，按倒数排名融合。"""
+    bm = [i for i, _ in _bm25_ranking(index, question, candidates)]
+    sem = [i for i, _ in _semantic_ranking(index, question, embedder, candidates)]
+    fused = rrf_fuse([bm, sem])[:top_k]
+    return [(index.chunks[i], s) for i, s in fused]
+
+
+def retrieve_auto(
+    index: RepoIndex,
+    question: str,
+    embedder=None,
+    mode: str = "auto",
+    top_k: int = 6,
+) -> tuple[list[tuple[Chunk, float]], str]:
+    """按 mode 调度检索，返回 (hits, 实际使用的模式)。
+
+    mode: "bm25" | "semantic" | "hybrid" | "auto"。
+    auto = 有向量则 hybrid，否则 bm25；请求 semantic/hybrid 但向量
+    不可用时优雅降级并如实报告。
+    """
+    has_vectors = bool(index.vectors) and len(index.vectors) == len(index.chunks)
+    can_semantic = has_vectors and embedder is not None
+
+    if mode == "bm25" or (mode == "auto" and not can_semantic):
+        return retrieve(index, question, top_k), "词法"
+    if mode == "semantic":
+        if not can_semantic:
+            return retrieve(index, question, top_k), "词法"
+        return retrieve_semantic(index, question, embedder, top_k), "语义"
+    if mode == "hybrid":
+        if not can_semantic:
+            return retrieve(index, question, top_k), "词法"
+        return retrieve_hybrid(index, question, embedder, top_k), "混合"
+    # auto + can_semantic
+    return retrieve_hybrid(index, question, embedder, top_k), "混合"
