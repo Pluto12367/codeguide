@@ -6,6 +6,42 @@ CodeGuide 扫描代码仓库，产出结构化画像：语言构成、模块地�
 内部 import 依赖图、枢纽文件排名。后续版本将接入 LLM 生成分层架构摘要、Mermaid 架构图、
 "第一周阅读路线"，并支持针对仓库的 RAG 问答。
 
+## 架构
+
+```mermaid
+flowchart TB
+    subgraph Input["输入"]
+        REPO[目标代码仓库]
+    end
+    subgraph Scan["静态分析 (codeguide/)"]
+        SC[scanner.py<br/>语言检测 + 跳过无关目录]
+        SYM[symbols.py / symbols_js.py<br/>tree-sitter 符号提取]
+        DEP[deps_graph.py<br/>import 依赖图 + 循环检测]
+        RISK[risks.py<br/>git 变更频次 × PageRank]
+        ROAD[roadmap.py<br/>PageRank 阅读路线]
+    end
+    subgraph RAG["检索问答"]
+        IDX[indexer.py<br/>增量索引 (BM25 + 向量)]
+        ASK[ask.py<br/>RRF 混合检索 / LLM 问答]
+        EMB[embedders.py<br/>本地 ONNX / API 嵌入]
+    end
+    subgraph Output["产出"]
+        REP[report.py<br/>交互式 HTML 报告]
+        GUIDE[guide.py<br/>LLM 分层摘要指南]
+    end
+    REPO --> SC --> SYM --> DEP
+    DEP --> RISK --> ROAD
+    REPO --> IDX --> ASK
+    EMB --> ASK
+    SYM --> REP
+    DEP --> REP
+    RISK --> REP
+    ROAD --> REP
+    ASK --> GUIDE
+    LLM[(LLM<br/>可选, OpenAI 兼容)] -.-> ASK
+    LLM -.-> GUIDE
+```
+
 ## 当前功能（v0.7，前端交互升级轮）
 
 - **交互式 HTML 报告**（v0.7 全面升级）：仍是零构建单文件，体验对齐专业代码分析工具
